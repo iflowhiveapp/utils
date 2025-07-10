@@ -171,7 +171,7 @@ func StructToJSONString(data interface{}) string {
 	return string(jsonData)
 }
 
-func getHostName() string {
+func GetHostName() string {
 	hostName, err := os.Hostname()
 	if err != nil {
 		return ""
