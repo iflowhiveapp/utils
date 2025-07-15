@@ -434,59 +434,75 @@ func GetIPAddresses() map[string]string {
 
 func GetPIDByPort(port string) (int32, string, error) {
 	if runtime.GOOS == "windows" {
-		// Use netstat -ano to find the PID for the given port
+		// Windows logic: netstat -ano
 		out, err := exec.Command("netstat", "-ano").Output()
 		if err != nil {
 			return -1, "", fmt.Errorf("error running netstat command: %w", err)
 		}
-		lines := strings.Split(string(out), "\n")
-		for _, line := range lines {
+		for _, line := range strings.Split(string(out), "\n") {
 			fields := strings.Fields(line)
 			if len(fields) >= 5 && (fields[0] == "TCP" || fields[0] == "UDP") {
-				localAddr := fields[1]
-				// Check if the port matches
-				if strings.HasSuffix(localAddr, ":"+port) {
-					pid := fields[len(fields)-1]
-					num, err := strconv.ParseInt(pid, 10, 32)
+				if strings.HasSuffix(fields[1], ":"+port) {
+					pidStr := fields[len(fields)-1]
+					pidNum, err := strconv.ParseInt(pidStr, 10, 32)
 					if err != nil {
 						return -1, "", fmt.Errorf("error parsing PID: %w", err)
 					}
-					return int32(num), "nil", nil
+					return int32(pidNum), "nil", nil
 				}
 			}
 		}
-		return -1, "", errors.New("no process found on the given port")
+		return -1, "", errors.New("no process found on the given port (Windows)")
 	}
-	// Linux logic (existing)
+
+	// Linux logic: first check if anything is listening at all
 	ln, err := net.Listen("tcp", ":"+port)
 	if err == nil {
 		ln.Close()
 		return -1, "", errors.New("no process found on the given port")
 	}
-	cmd := exec.Command("sh", "-c", "ss -tlnp | grep '"+port+"' | awk '{print $6}' | cut -d',' -f2 | cut -d'=' -f2")
+
+	// Run `ss` to extract PID(s)
+	ssCmd := fmt.Sprintf(
+		"ss -tlnp | grep ':%s ' | awk '{print $6}' | cut -d',' -f2 | cut -d'=' -f2",
+		port,
+	)
+	cmd := exec.Command("sh", "-c", ssCmd)
 	out, err := cmd.Output()
 	if err != nil {
 		return -1, "", fmt.Errorf("error running ss command: %w", err)
 	}
-	pid := strings.TrimSpace(string(out))
-	if pid == "" {
-		// Check if the port is in use by a Docker container
-		cmd = exec.Command("docker", "ps", "--filter", fmt.Sprintf("publish=%s", port), "--format", "{{.ID}}")
-		output, err := cmd.Output()
-		if err != nil || len(output) == 0 {
+
+	// Split on whitespace/newlines and take the first non-empty entry
+	lines := strings.Fields(strings.TrimSpace(string(out)))
+	if len(lines) == 0 {
+		// Docker fallback: look for a container publishing this port
+		dockerPS := fmt.Sprintf("docker ps --filter publish=%s --format {{.ID}}", port)
+		psCmd := exec.Command("sh", "-c", dockerPS)
+		psOut, err := psCmd.Output()
+		if err != nil || len(psOut) == 0 {
 			return -1, "", errors.New("no process found on the given port")
 		}
-		containerID := strings.TrimSpace(string(output))
-		cmd = exec.Command("docker", "inspect", "--format", "{{.State.Pid}}", containerID)
-		output, err = cmd.Output()
-		if err != nil || len(output) == 0 {
-			return -1, "", errors.New("no process found on the given port")
+		containerID := strings.TrimSpace(string(psOut))
+
+		// Inspect the container's PID
+		inspectCmd := exec.Command(
+			"docker", "inspect", "--format", "{{.State.Pid}}", containerID,
+		)
+		inspOut, err := inspectCmd.Output()
+		if err != nil || len(inspOut) == 0 {
+			return -1, "", errors.New("docker inspect failed to return PID")
 		}
-		pid = strings.TrimSpace(string(output))
+		lines = strings.Fields(strings.TrimSpace(string(inspOut)))
+		if len(lines) == 0 {
+			return -1, "", errors.New("no PID found in Docker inspect output")
+		}
 	}
-	num, err := strconv.ParseInt(pid, 10, 32)
+
+	pidStr := lines[0]
+	pidNum, err := strconv.ParseInt(pidStr, 10, 32)
 	if err != nil {
 		return -1, "", fmt.Errorf("error parsing PID: %w", err)
 	}
-	return int32(num), "nil", nil
+	return int32(pidNum), "nil", nil
 }
