@@ -36,10 +36,6 @@ type Metrics struct {
 	MetricsConfig MetricsConfig `json:"metricsConfig"`
 }
 
-// GlobalMetricsConfig can be filled by your application at start‑up
-// (e.g. from JSON or a DB) and is used by the conversion helpers below.
-var GlobalMetricsConfig []Metrics
-
 /* ---------- Generic converters ---------- */
 
 // StringToUint64 converts "123" or "123.45" ➜ 123.
@@ -66,8 +62,8 @@ func StringToFloat(str string) float64 {
 /* ---------- Metric‑specific helpers ---------- */
 
 // ValueConvertPercentage converts used vs total cores ➜ percentage (%).
-func ValueConvertPercentage(usedCores, totalCores float64) (float64, error) {
-	for _, m := range GlobalMetricsConfig {
+func ValueConvertPercentage(config []Metrics, usedCores, totalCores float64) (float64, error) {
+	for _, m := range config {
 		if m.Metrics == "CPU" && m.BaseUnit == "Percentage" {
 			return applyFormula(m.MetricsConfig.Formula, usedCores, totalCores)
 		}
@@ -76,18 +72,18 @@ func ValueConvertPercentage(usedCores, totalCores float64) (float64, error) {
 }
 
 // MemoryValueConvert converts bytes ➜ MiB/GiB/… depending on config.
-func MemoryValueConvert(used, total, free uint64) (u, t, f float64, unit string, err error) {
-	return genericMemoryConvert("Memory", used, total, free)
+func MemoryValueConvert(config []Metrics, used, total, free uint64) (u, t, f float64, unit string, err error) {
+	return genericMemoryConvert(config, "Memory", used, total, free)
 }
 
 // DiskValueConvert converts bytes ➜ MiB/GiB/… depending on config.
-func DiskValueConvert(used, total, free uint64) (u, t, f float64, unit string, err error) {
-	return genericMemoryConvert("Disk", used, total, free)
+func DiskValueConvert(config []Metrics, used, total, free uint64) (u, t, f float64, unit string, err error) {
+	return genericMemoryConvert(config, "Disk", used, total, free)
 }
 
 // genericMemoryConvert is shared by Memory/Disk helpers.
-func genericMemoryConvert(metric string, used, total, free uint64) (float64, float64, float64, string, error) {
-	for _, m := range GlobalMetricsConfig {
+func genericMemoryConvert(config []Metrics, metric string, used, total, free uint64) (float64, float64, float64, string, error) {
+	for _, m := range config {
 		if m.Metrics == metric && m.MetricsConfig.Formula != "" && m.BaseUnit != "Bytes" {
 			u, err1 := applyFormula(m.MetricsConfig.Formula, float64(used), float64(total))
 			t, err2 := applyFormula(m.MetricsConfig.Formula, float64(total), float64(total))
